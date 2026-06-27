@@ -71,3 +71,25 @@ claude-cage --rebuild
 # Pass arguments to the claude command
 claude-cage --volume personal "explain this codebase"
 ```
+
+## Advanced usage
+
+### Entering the container shell
+
+While `claude-cage` is running, you can open an interactive Bash shell inside the container:
+
+```sh
+podman exec -it CONTAINER_NAME /bin/bash
+```
+
+Replace `CONTAINER_NAME` with the actual container name or ID (find it with `podman ps`).
+
+### Installing skills
+
+Install skills from inside the container shell, for example:
+
+```sh
+pnpx skills add -g JuliusBrussee/caveman
+```
+
+Because the home volume persists across runs, an installed skill is available in all future sessions that use the same volume.
