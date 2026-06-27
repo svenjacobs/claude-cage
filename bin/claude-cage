@@ -1,0 +1,72 @@
+#!/usr/bin/env sh
+# Run Claude Code in an isolated Podman sandbox.
+# Optional --volume SUFFIX selects the home volume holding ~/.claude,
+# ~/.claude.json and history. The suffix is appended to "claude-cage-home"
+# (e.g. --volume work -> claude-cage-home-work); with no flag the default
+# "claude-cage-home" is used. A new name is created by podman on first use,
+# giving a separate, independently-configured instance.
+# All other arguments are forwarded to the claude command.
+set -eu
+
+image=claude-cage
+script_dir=$(dirname "$(readlink -f "$0")")
+context=$(dirname "$script_dir")
+suffix=
+rebuild=0
+
+# Extract --help / --rebuild / --volume from anywhere; forward the rest unchanged.
+# Rotate through the original args (tracked by n) re-appending pass-throughs.
+n=$#
+while [ "$n" -gt 0 ]; do
+    arg=$1; shift; n=$((n - 1))
+    case $arg in
+        --help|-h)
+            cat >&2 <<'EOF'
+Usage: claude-cage [OPTIONS] [CLAUDE_ARGS...]
+
+Run Claude Code in an isolated Podman sandbox.
+
+Options:
+  --volume[=SUFFIX]   Use a named home volume with the given suffix.
+                      The volume is named "claude-cage-home[-SUFFIX]" and
+                      holds ~/.claude, ~/.claude.json and shell history.
+                      Omitting the suffix uses the default shared volume.
+                      A new volume is created automatically on first use,
+                      giving a separate, independently-configured instance.
+  --rebuild           Force a rebuild of the container image before running.
+  -h, --help          Show this help message and exit.
+
+Any remaining arguments are forwarded verbatim to the claude command.
+EOF
+            exit 0 ;;
+        --rebuild)
+            rebuild=1 ;;
+        --volume)
+            [ "$n" -gt 0 ] || { echo "claude-cage: --volume requires a value" >&2; exit 2; }
+            suffix=$1; shift; n=$((n - 1)) ;;
+        --volume=*)
+            suffix=${arg#--volume=} ;;
+        *)
+            set -- "$@" "$arg" ;;
+    esac
+done
+
+# Append the suffix to the base volume name when provided.
+vol=claude-cage-home
+[ -n "$suffix" ] && vol="claude-cage-home-$suffix"
+
+# Rebuild explicitly requested, or build on first use (image absent).
+if [ "$rebuild" -eq 1 ]; then
+    echo "claude-cage: rebuilding image '$image' from $context ..." >&2
+    podman build -t "$image" "$context"
+elif ! podman image exists "$image"; then
+    echo "claude-cage: image '$image' not found, building from $context ..." >&2
+    podman build -t "$image" "$context"
+fi
+
+# Named volumes are created automatically if they don't exist yet.
+exec podman run -it --rm \
+    --userns=keep-id \
+    -v "$PWD:/workspace:Z" \
+    -v "$vol:/home/dev" \
+    "$image" "$@"
