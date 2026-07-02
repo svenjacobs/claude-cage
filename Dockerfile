@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nano \
     ca-certificates \
     gnupg \
+    pinentry-tty \
     fish \
     openjdk-25-jdk-headless \
  && rm -rf /var/lib/apt/lists/* \
@@ -86,6 +87,19 @@ RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
  && rm -rf /var/lib/apt/lists/*
 # -------------------------------------------------------------------------
 
+# GPG's pinentry needs to know which terminal to prompt on (via $GPG_TTY).
+# Interactive shells opened separately (e.g. `podman exec ... bash`) don't run the
+# entrypoint, so set it in the shell startup files: login/POSIX shells via
+# profile.d, interactive Bash via bash.bashrc, and fish via conf.d. Without this,
+# signing fails with "Inappropriate ioctl for device".
+RUN printf '%s\n' '[ -t 0 ] && GPG_TTY=$(tty) && export GPG_TTY' \
+      > /etc/profile.d/gpg-tty.sh \
+ && printf '\n%s\n' '[ -t 0 ] && GPG_TTY=$(tty) && export GPG_TTY' \
+      >> /etc/bash.bashrc \
+ && mkdir -p /etc/fish/conf.d \
+ && printf '%s\n' 'if isatty stdin' '    set -gx GPG_TTY (tty)' 'end' \
+      > /etc/fish/conf.d/gpg-tty.fish
+
 # Run as a non-root user; own the SDK so on-the-fly sdkmanager updates work
 RUN useradd -m dev && chown -R dev:dev $ANDROID_HOME
 USER dev
@@ -95,4 +109,6 @@ WORKDIR /workspace
 # read-only inside the image. Disable it so it doesn't error or stall on start.
 ENV DISABLE_AUTOUPDATER=1
 
-ENTRYPOINT ["claude"]
+# Entrypoint prepares GPG (see the script) then execs claude, forwarding all args.
+COPY --chmod=755 bin/cage-entrypoint /usr/local/bin/cage-entrypoint
+ENTRYPOINT ["/usr/local/bin/cage-entrypoint"]

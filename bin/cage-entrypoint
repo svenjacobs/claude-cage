@@ -1,0 +1,41 @@
+#!/bin/sh
+# Container entrypoint. Prepares GPG for commit signing, then hands off to claude.
+#
+# The host's ~/.gnupg is mounted read-only at ~/.gnupg-host. It usually arrives
+# over virtiofs (Podman runs in a VM), and virtiofs cannot host the gpg-agent
+# Unix socket — gpg-agent would fail to start if GNUPGHOME lived there. So we
+# build a real GNUPGHOME on the socket-capable home volume instead: the public
+# keyring and trustdb are copied (small, non-secret, and writable so gpg can
+# update trust), while private-keys-v1.d is symlinked back to the host mount so
+# secret keys are read live and never persisted into the volume.
+set -eu
+
+g="$HOME/.gnupg"
+host="$HOME/.gnupg-host"
+
+if [ -d "$host" ]; then
+    # Rebuild from scratch each run so nothing goes stale.
+    rm -rf "$g"
+    mkdir -p "$g"
+    chmod 700 "$g"
+    for f in pubring.kbx pubring.gpg trustdb.gpg; do
+        [ -f "$host/$f" ] && cp -p "$host/$f" "$g/$f"
+    done
+    [ -d "$host/private-keys-v1.d" ] && ln -sfn "$host/private-keys-v1.d" "$g/private-keys-v1.d"
+    # Force a pinentry that exists in the image; the host's own gpg-agent.conf
+    # may point at a GUI pinentry (e.g. pinentry-mac) that isn't installed here.
+    # pinentry-tty prompts inline (no full-screen curses) so it doesn't clash
+    # with Claude's terminal UI.
+    printf 'pinentry-program /usr/bin/pinentry-tty\n' > "$g/gpg-agent.conf"
+    : > "$g/.cage-managed"
+elif [ -e "$g/.cage-managed" ]; then
+    # A previous run built this; the host keys aren't mounted now, so clear it
+    # out rather than leave dangling symlinks behind.
+    rm -rf "$g"
+fi
+
+# pinentry-curses needs a terminal to prompt on.
+GPG_TTY="$(tty 2>/dev/null || true)"
+[ -n "$GPG_TTY" ] && export GPG_TTY
+
+exec claude "$@"

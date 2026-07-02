@@ -5,6 +5,8 @@
 # (e.g. --volume work -> claude-cage-home-work); with no flag the default
 # "claude-cage-home" is used. A new name is created by podman on first use,
 # giving a separate, independently-configured instance.
+# The host's ~/.gitconfig and ~/.gnupg, when present, are mounted automatically
+# so commits use the real git identity and GPG keys; --no-git disables this.
 # All other arguments are forwarded to the claude command.
 set -eu
 
@@ -13,6 +15,7 @@ script_dir=$(dirname "$(readlink -f "$0")")
 context=$(dirname "$script_dir")
 suffix=
 rebuild=0
+no_git=0
 
 # Extract --help / --rebuild / --volume from anywhere; forward the rest unchanged.
 # Rotate through the original args (tracked by n) re-appending pass-throughs.
@@ -33,6 +36,8 @@ Options:
                       Omitting the suffix uses the default shared volume.
                       A new volume is created automatically on first use,
                       giving a separate, independently-configured instance.
+  --no-git            Do not mount the host's ~/.gitconfig and ~/.gnupg, even
+                      when they exist. Keeps the container fully isolated.
   --rebuild           Force a rebuild of the container image before running.
   -h, --help          Show this help message and exit.
 
@@ -41,6 +46,8 @@ EOF
             exit 0 ;;
         --rebuild)
             rebuild=1 ;;
+        --no-git)
+            no_git=1 ;;
         --volume)
             [ "$n" -gt 0 ] || { echo "claude-cage: --volume requires a value" >&2; exit 2; }
             suffix=$1; shift; n=$((n - 1)) ;;
@@ -64,9 +71,22 @@ elif ! podman image exists "$image"; then
     podman build -t "$image" "$context"
 fi
 
+# Assemble the podman invocation. Unless --no-git is given, host ~/.gitconfig and
+# ~/.gnupg (when present) are exposed so commits use the real git identity and GPG
+# keys. ~/.gitconfig mounts read-only at its usual path. ~/.gnupg mounts read-only
+# at a staging path (.gnupg-host): the entrypoint copies it into a real GNUPGHOME
+# on the home volume, because the host mount is typically virtiofs, which cannot
+# host the gpg-agent socket. Prepending keeps the image immediately before the
+# forwarded claude args, and the set -- pattern stays safe with spaces in $HOME.
+set -- "$image" "$@"
+if [ "$no_git" -eq 0 ]; then
+    [ -d "$HOME/.gnupg" ]     && set -- -v "$HOME/.gnupg:/home/dev/.gnupg-host:ro"    "$@"
+    [ -f "$HOME/.gitconfig" ] && set -- -v "$HOME/.gitconfig:/home/dev/.gitconfig:ro" "$@"
+fi
+set -- --userns=keep-id \
+       -v "$PWD:/workspace:Z" \
+       -v "$vol:/home/dev" \
+       "$@"
+
 # Named volumes are created automatically if they don't exist yet.
-exec podman run -it --rm \
-    --userns=keep-id \
-    -v "$PWD:/workspace:Z" \
-    -v "$vol:/home/dev" \
-    "$image" "$@"
+exec podman run -it --rm "$@"

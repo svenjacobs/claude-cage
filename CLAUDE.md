@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-`claude-cage` is a two-file project: a `Dockerfile` that builds the sandbox image and a POSIX shell script `bin/claude-cage` that manages the Podman container lifecycle. There are no build systems, package managers, or test suites.
+`claude-cage` is a small project: a `Dockerfile` that builds the sandbox image, a POSIX shell script `bin/claude-cage` that manages the Podman container lifecycle from the host, and a container entrypoint `bin/cage-entrypoint` that prepares GPG before launching Claude Code. There are no build systems, package managers, or test suites.
 
 ## Architecture
 
@@ -24,11 +24,18 @@ The `ENTRYPOINT` is `claude`, so all arguments passed to `podman run` are forwar
 
 A POSIX `sh` script (no bashisms). It:
 
-- Parses `--help`, `--rebuild`, and `--volume[=SUFFIX]` flags from anywhere in the argument list, forwarding everything else to `claude` inside the container.
+- Parses `--help`, `--rebuild`, `--no-git`, and `--volume[=SUFFIX]` flags from anywhere in the argument list, forwarding everything else to `claude` inside the container.
 - Derives the build context from its own location (`dirname` of the script → parent = repo root), so it works regardless of where it is invoked from.
 - Names the home volume `claude-cage-home` or `claude-cage-home-<suffix>`, mounting it at `/home/dev` to persist `~/.claude`, `~/.claude.json`, and shell history.
 - Mounts `$PWD` at `/workspace:Z` (the `:Z` label is required for SELinux hosts).
+- Exposes the host's `~/.gitconfig` (read-only, at its usual path) and `~/.gnupg` (read-only, at the staging path `/home/dev/.gnupg-host`) when they exist, so commits use the real git identity and GPG keys. `--no-git` skips both. These dotfile mounts deliberately omit the `:Z`/`:z` label to avoid relabeling — and breaking — the host's own files. The mount args are assembled with a space-safe `set --` prepend that keeps the image immediately before the forwarded `claude` args.
 - Builds the image automatically on first use; `--rebuild` forces a rebuild.
+
+### `bin/cage-entrypoint`
+
+The image `ENTRYPOINT`. It prepares GPG and then `exec claude "$@"`, so all `podman run` arguments still reach Claude Code. The host `~/.gnupg` almost always arrives over **virtiofs** (Podman runs inside a VM), and virtiofs cannot host the `gpg-agent` Unix socket — so a `GNUPGHOME` placed directly on that mount fails to start the agent. To work around this, when `~/.gnupg-host` is present the entrypoint builds a real `GNUPGHOME` at `~/.gnupg` on the socket-capable home volume: it copies the public keyring and `trustdb.gpg` (small, non-secret, and writable so gpg can update trust) and symlinks `private-keys-v1.d` back to the read-only host mount (secret keys are read live, never persisted into the volume). It also writes a `gpg-agent.conf` pinning `pinentry-program` to `/usr/bin/pinentry-tty` (the host's own config may point at a GUI pinentry that isn't installed here; `pinentry-tty` prompts inline rather than drawing a full-screen curses dialog that would clash with Claude's terminal UI) and exports `GPG_TTY` so pinentry can prompt. A `.cage-managed` marker lets a later run without the keys mounted clean the directory back up.
+
+Because the entrypoint only sets `GPG_TTY` for the `claude` process tree, the image *also* sets it from the shell startup files (`/etc/profile.d/gpg-tty.sh`, `/etc/bash.bashrc`, `/etc/fish/conf.d/gpg-tty.fish`) so that shells opened separately via `podman exec` can sign too. Without a terminal, pinentry fails with `Inappropriate ioctl for device`.
 
 ## Common tasks
 
