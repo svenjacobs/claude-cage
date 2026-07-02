@@ -91,13 +91,42 @@ running`. The container sidesteps this by keeping the agent socket on the volume
 while reading your keys from the mount; your secret keys are read live and are
 **not** persisted into the volume.
 
+### Unlocking the signing key once per session
+
+Claude runs `git` non-interactively, so it cannot type your key passphrase
+itself. Instead the key is unlocked **once per session** and `gpg-agent` caches
+the passphrase (the cache is shared with Claude's process tree and held for
+~30 days, so it effectively lasts the whole session).
+
+When a signing key is configured (`user.signingkey`), `claude-cage` prompts for
+your passphrase **at startup**, right before Claude launches:
+
+```
+cage-entrypoint: unlocking GPG signing key for this session…
+Enter passphrase: ▮
+```
+
+Type it once and Claude's commits sign without prompting for the rest of the
+session. Leaving it blank (or pressing Ctrl-C) skips unlocking and still launches
+Claude — you can unlock later.
+
+To unlock (or re-unlock) mid-session, run `gpg-unlock` in a shell into the
+running container:
+
+```sh
+podman exec -it CONTAINER_NAME gpg-unlock    # prompts once via pinentry-tty
+```
+
+If Claude tries to commit while the key is still locked, that commit fails with a
+passphrase error — just run `gpg-unlock` and retry (`git commit --amend -S
+--no-edit`, or re-run the commit). Keys without a passphrase need no unlocking at
+all.
+
 A few things to be aware of:
 
-- **Passphrase prompts.** A key with a passphrase triggers a `pinentry-tty`
-  prompt (inline in your terminal) on the first signed commit of a session; the
-  passphrase is then cached for the remainder of that container run. Keys without
-  a passphrase sign with no prompt. `pinentry-tty` is used rather than a
-  full-screen curses dialog so it doesn't clash with Claude's terminal UI.
+- **Passphrase prompts.** `gpg-unlock` (and any signed commit you make yourself)
+  uses `pinentry-tty`, which prompts inline in your terminal rather than drawing
+  a full-screen curses dialog that would clash with Claude's terminal UI.
 - **Public keyring format.** The copy handles the classic `pubring.kbx` keyring.
   If you use the newer `keyboxd` database exclusively, additional keys may not be
   visible — open an issue if you hit this.

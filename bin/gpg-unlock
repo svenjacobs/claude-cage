@@ -1,0 +1,25 @@
+#!/bin/sh
+# Unlock the GPG signing key for this session. Prompts for the passphrase once
+# (via pinentry-tty) and caches it in gpg-agent, so Claude's later, non-interactive
+# commits can sign without prompting. gpg-agent is a single daemon shared by this
+# shell and Claude's process tree, and cage-entrypoint configures a long cache TTL.
+#
+# Run this in an interactive shell (e.g. `podman exec -it <container> bash`).
+set -eu
+
+# pinentry needs a terminal to prompt on. Set GPG_TTY ourselves so this works
+# even when invoked directly (e.g. `podman exec -it <container> gpg-unlock`),
+# not just from an interactive shell that sourced the startup files.
+if [ ! -t 0 ]; then
+    echo "gpg-unlock: run this in an interactive terminal (e.g. podman exec -it ...)" >&2
+    exit 1
+fi
+GPG_TTY=$(tty); export GPG_TTY
+
+# Sign with the same key git uses, so the correct keygrip gets cached.
+key=$(git config --get user.signingkey 2>/dev/null || true)
+set --
+[ -n "$key" ] && set -- --local-user "$key"
+
+printf 'claude-cage gpg-unlock\n' | gpg "$@" --sign --output /dev/null
+echo "GPG signing key unlocked for this session."

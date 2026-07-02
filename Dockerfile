@@ -110,5 +110,7 @@ WORKDIR /workspace
 ENV DISABLE_AUTOUPDATER=1
 
 # Entrypoint prepares GPG (see the script) then execs claude, forwarding all args.
+# gpg-unlock lets the user cache the signing passphrase once per session.
 COPY --chmod=755 bin/cage-entrypoint /usr/local/bin/cage-entrypoint
+COPY --chmod=755 bin/gpg-unlock /usr/local/bin/gpg-unlock
 ENTRYPOINT ["/usr/local/bin/cage-entrypoint"]

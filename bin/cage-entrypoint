@@ -25,8 +25,14 @@ if [ -d "$host" ]; then
     # Force a pinentry that exists in the image; the host's own gpg-agent.conf
     # may point at a GUI pinentry (e.g. pinentry-mac) that isn't installed here.
     # pinentry-tty prompts inline (no full-screen curses) so it doesn't clash
-    # with Claude's terminal UI.
-    printf 'pinentry-program /usr/bin/pinentry-tty\n' > "$g/gpg-agent.conf"
+    # with Claude's terminal UI. The long cache TTL (~30 days) lets the user
+    # unlock the key once per session (see gpg-unlock) and have Claude's
+    # non-interactive commits reuse the cached passphrase.
+    printf '%s\n' \
+        'pinentry-program /usr/bin/pinentry-tty' \
+        'default-cache-ttl 2592000' \
+        'max-cache-ttl 2592000' \
+        > "$g/gpg-agent.conf"
     : > "$g/.cage-managed"
 elif [ -e "$g/.cage-managed" ]; then
     # A previous run built this; the host keys aren't mounted now, so clear it
@@ -34,8 +40,19 @@ elif [ -e "$g/.cage-managed" ]; then
     rm -rf "$g"
 fi
 
-# pinentry-curses needs a terminal to prompt on.
+# pinentry needs a terminal to prompt on; export GPG_TTY for the claude process
+# tree (shells opened via `podman exec` get it from the shell startup files).
 GPG_TTY="$(tty 2>/dev/null || true)"
 [ -n "$GPG_TTY" ] && export GPG_TTY
+
+# Unlock the signing key once at startup so Claude's non-interactive commits can
+# sign without a per-commit prompt. Only when the keys are mounted, a signing key
+# is configured, and we have a terminal to prompt on. Non-fatal: if the passphrase
+# is skipped or cancelled, Claude still launches (unlock later with gpg-unlock).
+if [ -d "$host" ] && [ -n "$GPG_TTY" ] \
+   && [ -n "$(git config --get user.signingkey 2>/dev/null || true)" ]; then
+    echo "cage-entrypoint: unlocking GPG signing key for this session…" >&2
+    gpg-unlock || echo "cage-entrypoint: key not unlocked; run gpg-unlock later." >&2
+fi
 
 exec claude "$@"
