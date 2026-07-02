@@ -10,6 +10,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     less \
     file \
+    vim \
+    nano \
     ca-certificates \
     gnupg \
     fish \
