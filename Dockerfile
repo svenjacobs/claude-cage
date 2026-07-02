@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     less \
     file \
     ca-certificates \
+    gnupg \
     fish \
     openjdk-25-jdk-headless \
  && rm -rf /var/lib/apt/lists/* \
@@ -60,6 +61,16 @@ ARG BUILD_TOOLS=37.0.0
 RUN yes | sdkmanager --licenses >/dev/null \
  && sdkmanager --install "platform-tools" "platforms;${ANDROID_PLATFORM}" "build-tools;${BUILD_TOOLS}"
 # ------------------------------------------------------------------------
+
+# --- Google Cloud CLI ----------------------------------------------------
+RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+      | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg \
+ && echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
+      > /etc/apt/sources.list.d/google-cloud-sdk.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends google-cloud-cli \
+ && rm -rf /var/lib/apt/lists/*
+# -------------------------------------------------------------------------
 
 # Run as a non-root user; own the SDK so on-the-fly sdkmanager updates work
 RUN useradd -m dev && chown -R dev:dev $ANDROID_HOME
